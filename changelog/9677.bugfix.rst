@@ -1,0 +1,3 @@
+Deferred :class:`PytestUnknownMarkWarning` when importing test modules until
+``pytest_plugins`` have been loaded, so custom marks registered in those plugins
+are recognized.

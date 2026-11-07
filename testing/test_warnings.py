@@ -925,6 +925,35 @@ class TestStackLevel:
             ]
         )
 
+    def test_unknown_mark_not_warned_when_registered_via_pytest_plugins(
+        self, pytester: Pytester
+    ) -> None:
+        """#9677: defer unknown mark warnings until pytest_plugins are loaded."""
+        pytester.makepyfile(
+            my_plugin="""
+            import pytest
+
+            @pytest.fixture
+            def foo():
+                return "foo"
+
+            def pytest_configure(config):
+                config.addinivalue_line("markers", "my_mark: custom mark")
+            """,
+            test_with_plugin="""
+            import pytest
+
+            pytest_plugins = ("my_plugin",)
+
+            @pytest.mark.my_mark
+            def test_01(foo):
+                assert foo == "foo"
+            """,
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=1)
+        result.stdout.no_fnmatch_line("*Unknown pytest.mark.my_mark*")
+
 
 def test_warning_on_testpaths_not_found(pytester: Pytester) -> None:
     # Check for warning when testpaths set, but not found by glob

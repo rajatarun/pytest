@@ -617,45 +617,73 @@ class MarkGenerator:
         check_ispytest(_ispytest)
         self._config: Config | None = None
         self._markers: set[str] = set()
+        self._defer_unknown_mark_warnings: bool = False
+        self._deferred_unknown_marks: set[str] = set()
+
+    def _issue_unknown_mark_warning(self, name: str) -> None:
+        if self._config is None:
+            return
+        # Raise a specific error for common misspellings of "parametrize".
+        if name in ["parameterize", "parametrise", "parameterise"]:
+            __tracebackhide__ = True
+            fail(f"Unknown '{name}' mark, did you mean 'parametrize'?")
+
+        strict_markers = self._config.getini("strict_markers")
+        if strict_markers is None:
+            strict_markers = self._config.getini("strict")
+        if strict_markers:
+            fail(
+                f"{name!r} not found in `markers` configuration option",
+                pytrace=False,
+            )
+
+        warnings.warn(
+            f"Unknown pytest.mark.{name} - is this a typo?  You can register "
+            "custom marks to avoid this warning - for details, see "
+            "https://docs.pytest.org/en/stable/how-to/mark.html",
+            PytestUnknownMarkWarning,
+            2,
+        )
+
+    def _warn_if_unknown_mark(self, name: str) -> None:
+        if self._config is None:
+            return
+        # We store a set of markers as a performance optimisation - if a mark
+        # name is in the set we definitely know it, but a mark may be known and
+        # not in the set.  We therefore start by updating the set!
+        if name not in self._markers:
+            self._markers.update(
+                m.name for m in self._config._iter_registered_markers()
+            )
+
+        if name in self._markers:
+            return
+
+        if self._defer_unknown_mark_warnings:
+            self._deferred_unknown_marks.add(name)
+            return
+
+        self._issue_unknown_mark_warning(name)
+
+    def _flush_deferred_unknown_marks(self) -> None:
+        if not self._deferred_unknown_marks:
+            return
+        self._markers.update(
+            m.name for m in self._config._iter_registered_markers()  # type: ignore[union-attr]
+        )
+        deferred = sorted(self._deferred_unknown_marks)
+        self._deferred_unknown_marks.clear()
+        for name in deferred:
+            if name in self._markers:
+                continue
+            self._issue_unknown_mark_warning(name)
 
     def __getattr__(self, name: str) -> MarkDecorator:
         """Generate a new :class:`MarkDecorator` with the given name."""
         if name[0] == "_":
             raise AttributeError("Marker name must NOT start with underscore")
 
-        if self._config is not None:
-            # We store a set of markers as a performance optimisation - if a mark
-            # name is in the set we definitely know it, but a mark may be known and
-            # not in the set.  We therefore start by updating the set!
-            if name not in self._markers:
-                self._markers.update(
-                    m.name for m in self._config._iter_registered_markers()
-                )
-
-            # If the name is not in the set of known marks after updating,
-            # then it really is time to issue a warning or an error.
-            if name not in self._markers:
-                # Raise a specific error for common misspellings of "parametrize".
-                if name in ["parameterize", "parametrise", "parameterise"]:
-                    __tracebackhide__ = True
-                    fail(f"Unknown '{name}' mark, did you mean 'parametrize'?")
-
-                strict_markers = self._config.getini("strict_markers")
-                if strict_markers is None:
-                    strict_markers = self._config.getini("strict")
-                if strict_markers:
-                    fail(
-                        f"{name!r} not found in `markers` configuration option",
-                        pytrace=False,
-                    )
-
-                warnings.warn(
-                    f"Unknown pytest.mark.{name} - is this a typo?  You can register "
-                    "custom marks to avoid this warning - for details, see "
-                    "https://docs.pytest.org/en/stable/how-to/mark.html",
-                    PytestUnknownMarkWarning,
-                    2,
-                )
+        self._warn_if_unknown_mark(name)
 
         return MarkDecorator(Mark(name, (), {}, _ispytest=True), _ispytest=True)
 
